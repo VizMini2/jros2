@@ -6,6 +6,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -506,4 +507,117 @@ extern "C" JNIEXPORT void JNICALL JNIFASTDDS(dataWriterListenerSetOnPublicationM
 {
    auto* nativeListener = reinterpret_cast<fastddsjava_DataWriterListener*>(listener);
    fastddsjava_datawriter_listener_set_on_publication_matched(nativeListener, makeJavaCallback(env, callback));
+}
+
+// ---- Graph discovery and request/reply pairing ----
+// Bound to their own class (us.ihmc.fastddsjava.natives.fastddsjavaGraph) so they can be added to the
+// native library without changing the fastddsjava class of already published jars.
+#define JNIFASTDDSGRAPH(name) Java_us_ihmc_fastddsjava_natives_fastddsjavaGraph_##name
+
+namespace
+{
+jobjectArray toStringArray(JNIEnv* env, const std::vector<std::string>& values)
+{
+   jclass stringClass = env->FindClass("java/lang/String");
+   jobjectArray out = env->NewObjectArray(static_cast<jsize>(values.size()), stringClass, nullptr);
+   for (size_t i = 0; i < values.size(); ++i)
+   {
+      jstring value = env->NewStringUTF(values[i].c_str());
+      env->SetObjectArrayElement(out, static_cast<jsize>(i), value);
+      env->DeleteLocalRef(value);
+   }
+   env->DeleteLocalRef(stringClass);
+   return out;
+}
+
+void fillIdentity(JNIEnv* env, jbyteArray out, const uint8_t* identity)
+{
+   if (out == nullptr || env->GetArrayLength(out) < 24)
+      return;
+   env->SetByteArrayRegion(out, 0, 24, reinterpret_cast<const jbyte*>(identity));
+}
+} // namespace
+
+// Each entry is "W|R <tab> topic <tab> type <tab> guid (32 hex chars)".
+extern "C" JNIEXPORT jobjectArray JNICALL JNIFASTDDSGRAPH(participantGetDiscoveredEndpoints)(JNIEnv* env, jclass, jlong participant)
+{
+   static const char* hex = "0123456789abcdef";
+   std::vector<std::string> lines;
+   for (const auto& endpoint : fastddsjava_participant_get_discovered_endpoints(reinterpret_cast<void*>(participant)))
+   {
+      std::string line;
+      line.reserve(endpoint.topic_name.size() + endpoint.type_name.size() + 40);
+      line += endpoint.is_writer ? 'W' : 'R';
+      line += '\t';
+      line += endpoint.topic_name;
+      line += '\t';
+      line += endpoint.type_name;
+      line += '\t';
+      for (uint8_t b : endpoint.guid)
+      {
+         line += hex[b >> 4];
+         line += hex[b & 0xF];
+      }
+      lines.push_back(std::move(line));
+   }
+   return toStringArray(env, lines);
+}
+
+extern "C" JNIEXPORT jobjectArray JNICALL JNIFASTDDSGRAPH(participantGetDiscoveredParticipantNames)(JNIEnv* env, jclass, jlong participant)
+{
+   return toStringArray(env, fastddsjava_participant_get_discovered_participant_names(reinterpret_cast<void*>(participant)));
+}
+
+extern "C" JNIEXPORT jboolean JNICALL JNIFASTDDSGRAPH(dataWriterGetLastSampleIdentity)(JNIEnv* env, jclass, jlong writer, jbyteArray identityOut)
+{
+   uint8_t identity[24];
+   if (!fastddsjava_datawriter_get_last_sample_identity(reinterpret_cast<void*>(writer), identity))
+      return JNI_FALSE;
+   fillIdentity(env, identityOut, identity);
+   return JNI_TRUE;
+}
+
+extern "C" JNIEXPORT void JNICALL JNIFASTDDSGRAPH(sampleInfoSampleIdentity)(JNIEnv* env, jclass, jlong sampleInfo, jbyteArray identityOut)
+{
+   uint8_t identity[24];
+   fastddsjava_sample_info_get_sample_identity(reinterpret_cast<eprosima::fastdds::dds::SampleInfo*>(sampleInfo), identity);
+   fillIdentity(env, identityOut, identity);
+}
+
+extern "C" JNIEXPORT void JNICALL JNIFASTDDSGRAPH(sampleInfoRelatedSampleIdentity)(JNIEnv* env, jclass, jlong sampleInfo, jbyteArray identityOut)
+{
+   uint8_t identity[24];
+   fastddsjava_sample_info_get_related_sample_identity(reinterpret_cast<eprosima::fastdds::dds::SampleInfo*>(sampleInfo), identity);
+   fillIdentity(env, identityOut, identity);
+}
+
+extern "C" JNIEXPORT void JNICALL JNIFASTDDSGRAPH(setInitialPeers)(JNIEnv* env, jclass, jobjectArray peers)
+{
+   std::vector<std::string> out;
+   jsize n = peers != nullptr ? env->GetArrayLength(peers) : 0;
+   for (jsize i = 0; i < n; ++i)
+   {
+      auto value = static_cast<jstring>(env->GetObjectArrayElement(peers, i));
+      out.push_back(jstringToString(env, value));
+      env->DeleteLocalRef(value);
+   }
+   fastddsjava_set_initial_peers(out);
+}
+
+extern "C" JNIEXPORT void JNICALL JNIFASTDDSGRAPH(setDiscoveryServers)(JNIEnv* env, jclass, jobjectArray servers)
+{
+   std::vector<std::string> out;
+   jsize n = servers != nullptr ? env->GetArrayLength(servers) : 0;
+   for (jsize i = 0; i < n; ++i)
+   {
+      auto value = static_cast<jstring>(env->GetObjectArrayElement(servers, i));
+      out.push_back(jstringToString(env, value));
+      env->DeleteLocalRef(value);
+   }
+   fastddsjava_set_discovery_servers(out);
+}
+
+extern "C" JNIEXPORT jobjectArray JNICALL JNIFASTDDSGRAPH(participantGetDiscoveredParticipantAddresses)(JNIEnv* env, jclass, jlong participant)
+{
+   return toStringArray(env, fastddsjava_participant_get_discovered_participant_addresses(reinterpret_cast<void*>(participant)));
 }

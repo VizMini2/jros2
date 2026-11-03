@@ -63,7 +63,7 @@ if [ "$ANDROID_COMPILE" == "1" ]; then
   ANDROID_API_LEVEL=${ANDROID_API_LEVEL:-24}
   # Add flags to disable warnings that Android NDK clang treats as errors
   ANDROID_CXX_FLAGS="-Wno-error=gnu-offsetof-extensions"
-  COMPILER_ARGS="-DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake -DANDROID_ABI=$ANDROID_ABI -DANDROID_PLATFORM=android-$ANDROID_API_LEVEL -DANDROID_NDK=$ANDROID_NDK -DANDROID_STL=c++_shared -DCMAKE_CXX_FLAGS=\"$ANDROID_CXX_FLAGS\""
+  COMPILER_ARGS="-DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake -DANDROID_ABI=$ANDROID_ABI -DANDROID_PLATFORM=android-$ANDROID_API_LEVEL -DANDROID_NDK=$ANDROID_NDK -DANDROID_STL=c++_shared -DCMAKE_CXX_FLAGS=\"$ANDROID_CXX_FLAGS\" -DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON -DCMAKE_SHARED_LINKER_FLAGS=-Wl,-z,max-page-size=16384"
 elif [ "$MAC_COMPILE_X86_64" == "1" ]; then
   # Export compiler flags so cmake and all subproject builds pick up the target arch
   ARCH_FLAGS="-arch x86_64"
@@ -205,7 +205,7 @@ if [ "$ANDROID_COMPILE" == "1" ]; then
     -std=c++17 -fexceptions -frtti -O3 -Wall -fPIC -pthread -shared \
     -o javainstall/libjnifastddsjava.so -L${INSTALL_DIR}/install/lib \
     -Wl,-rpath,${INSTALL_DIR}/install/lib \
-    -lfastdds -lfastcdr -llog -lc++_shared
+    -lfastdds -lfastcdr -llog -lc++_shared -Wl,-z,max-page-size=16384
   if [ ! -f "javainstall/libjnifastddsjava.so" ]; then
     echo "Error: Android JNI build did not produce javainstall/libjnifastddsjava.so"
     exit 1

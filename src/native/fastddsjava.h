@@ -88,4 +88,38 @@ void fastddsjava_delete_datawriter_listener(fastddsjava_DataWriterListener* list
 void fastddsjava_datawriter_listener_set_on_publication_matched(fastddsjava_DataWriterListener* listener,
                                                                 std::function<void()> callback);
 
+// ---- Graph discovery (ros2 topic/service/action list) and request/reply pairing ----
+
+// One discovered remote or local endpoint, as seen by the participant's builtin discovery.
+struct fastddsjava_DiscoveredEndpoint
+{
+   bool is_writer;
+   std::string topic_name;
+   std::string type_name;
+   uint8_t guid[16];
+};
+
+// Unicast discovery peers (IPv4 addresses) added to every participant created from now on, like
+// ROS_STATIC_PEERS. The default multicast discovery is kept. Useful on Wi-Fi networks that drop multicast.
+void fastddsjava_set_initial_peers(const std::vector<std::string>& peers);
+
+// Fast DDS Discovery Servers ("ip:port", like ROS_DISCOVERY_SERVER) for every participant created from now on.
+// When set, participants are SUPER_CLIENTs: they receive the discovery data of the whole domain (needed to list
+// the ROS graph) and don't use multicast discovery.
+void fastddsjava_set_discovery_servers(const std::vector<std::string>& servers);
+
+// Snapshot of every endpoint currently alive in the domain (as seen by this participant).
+std::vector<fastddsjava_DiscoveredEndpoint> fastddsjava_participant_get_discovered_endpoints(void* participant_);
+// Name of every participant currently alive in the domain (DDS participant_name, "" if none).
+std::vector<std::string> fastddsjava_participant_get_discovered_participant_names(void* participant_);
+// Every participant alive in the domain as "guidPrefixHex \t name \t ip1,ip2" (its unicast IPv4 discovery
+// locators, without loopback). Lets an app remember where robots are and reach them later by unicast.
+std::vector<std::string> fastddsjava_participant_get_discovered_participant_addresses(void* participant_);
+
+// Sample identities are 24 bytes: 16 bytes writer GUID + 4 bytes seq high (int32 BE) + 4 bytes seq low (uint32 BE).
+// Fills the identity of the last sample written by this writer through fastddsjava_datawriter_write. Returns false if none.
+bool fastddsjava_datawriter_get_last_sample_identity(void* writer_, uint8_t* identity_out);
+void fastddsjava_sample_info_get_sample_identity(eprosima::fastdds::dds::SampleInfo* info, uint8_t* identity_out);
+void fastddsjava_sample_info_get_related_sample_identity(eprosima::fastdds::dds::SampleInfo* info, uint8_t* identity_out);
+
 #endif // FASTDDSJAVA_H

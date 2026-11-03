@@ -1,11 +1,20 @@
 #include "fastddsjava.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
+#include <map>
+#include <mutex>
+#include <unordered_map>
 
 #include <fastdds/dds/core/StackAllocatedSequence.hpp>
 #include <fastdds/dds/domain/DomainParticipant.hpp>
 #include <fastdds/dds/domain/DomainParticipantFactory.hpp>
+#include <fastdds/dds/domain/DomainParticipantListener.hpp>
+#include <fastdds/dds/domain/qos/DomainParticipantExtendedQos.hpp>
+#include <fastdds/utils/IPLocator.hpp>
+#include <fastdds/rtps/common/SampleIdentity.hpp>
+#include <fastdds/rtps/common/WriteParams.hpp>
 #include <fastdds/dds/publisher/DataWriter.hpp>
 #include <fastdds/dds/publisher/DataWriterListener.hpp>
 #include <fastdds/dds/publisher/Publisher.hpp>
@@ -164,17 +173,336 @@ uint32_t fastddsjava_load_xml_profiles_string(const std::string& xml)
    return factory->load_XML_profiles_string(xml.c_str(), xml.length());
 }
 
+namespace
+{
+// Keeps the ROS graph (every endpoint and participant of the domain) from the builtin discovery
+// callbacks, so it can be listed like `ros2 topic list` / `ros2 service list`. Discovery callbacks
+// are delivered regardless of the StatusMask, so it is attached with StatusMask::none() and never
+// steals data callbacks from the readers' own listeners.
+class fastddsjava_GraphListener : public eprosima::fastdds::dds::DomainParticipantListener
+{
+public:
+   void on_participant_discovery(eprosima::fastdds::dds::DomainParticipant*, eprosima::fastdds::rtps::ParticipantDiscoveryStatus reason,
+                                 const eprosima::fastdds::rtps::ParticipantBuiltinTopicData& info, bool& should_be_ignored) override
+   {
+      should_be_ignored = false;
+      using Status = eprosima::fastdds::rtps::ParticipantDiscoveryStatus;
+      std::lock_guard<std::mutex> lock(mutex);
+      if (reason == Status::REMOVED_PARTICIPANT || reason == Status::DROPPED_PARTICIPANT || reason == Status::IGNORED_PARTICIPANT)
+      {
+         participants.erase(info.guid.guidPrefix);
+         addresses.erase(info.guid.guidPrefix);
+         // Endpoints of a participant that went away are not always reported one by one.
+         for (auto it = endpoints.begin(); it != endpoints.end();)
+         {
+            if (it->first.guidPrefix == info.guid.guidPrefix)
+               it = endpoints.erase(it);
+            else
+               ++it;
+         }
+      }
+      else
+      {
+         participants[info.guid.guidPrefix] = info.participant_name.to_string();
+         std::vector<std::string> ips;
+         for (const auto& locator : info.metatraffic_locators.unicast)
+         {
+            if (locator.kind != LOCATOR_KIND_UDPv4 || eprosima::fastdds::rtps::IPLocator::isLocal(locator))
+               continue;
+            std::string ip = eprosima::fastdds::rtps::IPLocator::toIPv4string(locator);
+            if (std::find(ips.begin(), ips.end(), ip) == ips.end())
+               ips.push_back(ip);
+         }
+         addresses[info.guid.guidPrefix] = ips;
+      }
+   }
+
+   void on_data_reader_discovery(eprosima::fastdds::dds::DomainParticipant*, eprosima::fastdds::rtps::ReaderDiscoveryStatus reason,
+                                 const eprosima::fastdds::dds::SubscriptionBuiltinTopicData& info, bool& should_be_ignored) override
+   {
+      should_be_ignored = false;
+      using Status = eprosima::fastdds::rtps::ReaderDiscoveryStatus;
+      update(info.guid, false, info.topic_name.to_string(), info.type_name.to_string(),
+             reason == Status::REMOVED_READER || reason == Status::IGNORED_READER);
+   }
+
+   void on_data_writer_discovery(eprosima::fastdds::dds::DomainParticipant*, eprosima::fastdds::rtps::WriterDiscoveryStatus reason,
+                                 const eprosima::fastdds::dds::PublicationBuiltinTopicData& info, bool& should_be_ignored) override
+   {
+      should_be_ignored = false;
+      using Status = eprosima::fastdds::rtps::WriterDiscoveryStatus;
+      update(info.guid, true, info.topic_name.to_string(), info.type_name.to_string(),
+             reason == Status::REMOVED_WRITER || reason == Status::IGNORED_WRITER);
+   }
+
+   std::vector<fastddsjava_DiscoveredEndpoint> snapshot()
+   {
+      std::lock_guard<std::mutex> lock(mutex);
+      std::vector<fastddsjava_DiscoveredEndpoint> out;
+      out.reserve(endpoints.size());
+      for (const auto& entry : endpoints)
+         out.push_back(entry.second);
+      return out;
+   }
+
+   std::vector<std::string> participant_addresses()
+   {
+      static const char* hex = "0123456789abcdef";
+      std::lock_guard<std::mutex> lock(mutex);
+      std::vector<std::string> out;
+      for (const auto& entry : participants)
+      {
+         std::string line;
+         for (uint8_t b : entry.first.value)
+         {
+            line += hex[b >> 4];
+            line += hex[b & 0xF];
+         }
+         line += '\t';
+         line += entry.second;
+         line += '\t';
+         auto it = addresses.find(entry.first);
+         if (it != addresses.end())
+         {
+            for (size_t i = 0; i < it->second.size(); ++i)
+            {
+               if (i > 0)
+                  line += ',';
+               line += it->second[i];
+            }
+         }
+         out.push_back(line);
+      }
+      return out;
+   }
+
+   std::vector<std::string> participant_names()
+   {
+      std::lock_guard<std::mutex> lock(mutex);
+      std::vector<std::string> out;
+      for (const auto& entry : participants)
+         out.push_back(entry.second);
+      return out;
+   }
+
+private:
+   void update(const eprosima::fastdds::rtps::GUID_t& guid, bool is_writer, std::string topic, std::string type, bool removed)
+   {
+      std::lock_guard<std::mutex> lock(mutex);
+      if (removed)
+      {
+         endpoints.erase(guid);
+         return;
+      }
+      fastddsjava_DiscoveredEndpoint& endpoint = endpoints[guid];
+      endpoint.is_writer = is_writer;
+      endpoint.topic_name = std::move(topic);
+      endpoint.type_name = std::move(type);
+      memcpy(endpoint.guid, guid.guidPrefix.value, 12);
+      memcpy(endpoint.guid + 12, guid.entityId.value, 4);
+   }
+
+   std::mutex mutex;
+   std::map<eprosima::fastdds::rtps::GUID_t, fastddsjava_DiscoveredEndpoint> endpoints;
+   std::map<eprosima::fastdds::rtps::GuidPrefix_t, std::string> participants;
+   std::map<eprosima::fastdds::rtps::GuidPrefix_t, std::vector<std::string>> addresses;
+};
+
+std::mutex g_graph_mutex;
+std::unordered_map<void*, fastddsjava_GraphListener*> g_graph_listeners;
+
+fastddsjava_GraphListener* graph_listener(void* participant_)
+{
+   std::lock_guard<std::mutex> lock(g_graph_mutex);
+   auto it = g_graph_listeners.find(participant_);
+   return it == g_graph_listeners.end() ? nullptr : it->second;
+}
+
+// Identity of the last sample written by each writer (only writers that have written at least once).
+std::mutex g_identity_mutex;
+std::unordered_map<void*, eprosima::fastdds::rtps::SampleIdentity> g_last_identity;
+
+void write_identity(const eprosima::fastdds::rtps::SampleIdentity& id, uint8_t* out)
+{
+   memcpy(out, id.writer_guid().guidPrefix.value, 12);
+   memcpy(out + 12, id.writer_guid().entityId.value, 4);
+   int32_t high = id.sequence_number().high;
+   uint32_t low = id.sequence_number().low;
+   for (int i = 0; i < 4; ++i)
+   {
+      out[16 + i] = static_cast<uint8_t>((static_cast<uint32_t>(high) >> (24 - 8 * i)) & 0xFF);
+      out[20 + i] = static_cast<uint8_t>((low >> (24 - 8 * i)) & 0xFF);
+   }
+}
+} // namespace
+
+// Participant ids reached on each peer (ROS 2 creates one participant per process).
+constexpr uint32_t PEER_PARTICIPANT_IDS = 32;
+std::mutex g_peers_mutex;
+std::vector<std::string> g_initial_peers;
+
+std::vector<std::string> g_discovery_servers;
+
+void fastddsjava_set_initial_peers(const std::vector<std::string>& peers)
+{
+   std::lock_guard<std::mutex> lock(g_peers_mutex);
+   g_initial_peers = peers;
+}
+
+void fastddsjava_set_discovery_servers(const std::vector<std::string>& servers)
+{
+   std::lock_guard<std::mutex> lock(g_peers_mutex);
+   g_discovery_servers = servers;
+}
+
 void* fastddsjava_create_participant(const std::string& profile_name)
 {
    auto factory = eprosima::fastdds::dds::DomainParticipantFactory::get_instance();
-   return factory->create_participant_with_profile(profile_name);
+   auto* listener = new fastddsjava_GraphListener();
+   std::vector<std::string> peers;
+   std::vector<std::string> servers;
+   {
+      std::lock_guard<std::mutex> lock(g_peers_mutex);
+      peers = g_initial_peers;
+      servers = g_discovery_servers;
+   }
+   void* participant = nullptr;
+   eprosima::fastdds::dds::DomainParticipantExtendedQos qos;
+   if ((!peers.empty() || !servers.empty()) &&
+       factory->get_participant_extended_qos_from_profile(profile_name, qos) == eprosima::fastdds::dds::RETCODE_OK)
+   {
+      if (!servers.empty())
+      {
+         auto& discovery = qos.wire_protocol().builtin.discovery_config;
+         discovery.discoveryProtocol = eprosima::fastdds::rtps::DiscoveryProtocol::SUPER_CLIENT;
+         for (const std::string& server : servers)
+         {
+            // "ip" or "ip:port" (11811 by default, like ROS_DISCOVERY_SERVER).
+            std::string address = server;
+            uint32_t port = 11811;
+            size_t colon = server.rfind(':');
+            if (colon != std::string::npos)
+            {
+               address = server.substr(0, colon);
+               port = static_cast<uint32_t>(std::strtoul(server.c_str() + colon + 1, nullptr, 10));
+            }
+            eprosima::fastdds::rtps::Locator_t locator;
+            locator.kind = LOCATOR_KIND_UDPv4;
+            if (port > 0 && port <= 65535 && eprosima::fastdds::rtps::IPLocator::setIPv4(locator, address))
+            {
+               locator.port = port;
+               discovery.m_DiscoveryServers.push_back(locator);
+            }
+         }
+      }
+
+      if (!peers.empty())
+      {
+         // Port 0 would only reach participant ids 0..maxInitialPeersRange (4 by default): a robot easily
+         // runs more processes than that, so the well-known unicast ports of many participant ids are listed.
+         auto& list = qos.wire_protocol().builtin.initialPeersList;
+         const auto& ports = qos.wire_protocol().port;
+         const uint32_t domain = qos.domainId();
+         if (list.empty())
+         {
+            // Setting initial peers replaces the default multicast one: keep it explicitly.
+            eprosima::fastdds::rtps::Locator_t multicast;
+            multicast.kind = LOCATOR_KIND_UDPv4;
+            eprosima::fastdds::rtps::IPLocator::setIPv4(multicast, "239.255.0.1");
+            multicast.port = 0;
+            list.push_back(multicast);
+         }
+         for (const std::string& peer : peers)
+         {
+            eprosima::fastdds::rtps::Locator_t locator;
+            locator.kind = LOCATOR_KIND_UDPv4;
+            if (!eprosima::fastdds::rtps::IPLocator::setIPv4(locator, peer))
+               continue;
+            for (uint32_t participant_id = 0; participant_id < PEER_PARTICIPANT_IDS; ++participant_id)
+            {
+               uint32_t port = ports.portBase + ports.domainIDGain * domain + ports.offsetd1 + ports.participantIDGain * participant_id;
+               if (port > 65535)
+                  break;
+               locator.port = port;
+               list.push_back(locator);
+            }
+         }
+      }
+      participant = factory->create_participant(qos, listener, eprosima::fastdds::dds::StatusMask::none());
+   }
+   else
+   {
+      participant = factory->create_participant_with_profile(profile_name, listener, eprosima::fastdds::dds::StatusMask::none());
+   }
+   if (participant == nullptr)
+   {
+      delete listener;
+      return nullptr;
+   }
+   std::lock_guard<std::mutex> lock(g_graph_mutex);
+   g_graph_listeners[participant] = listener;
+   return participant;
 }
 
 uint32_t fastddsjava_delete_participant(void* participant_)
 {
    auto* participant = static_cast<eprosima::fastdds::dds::DomainParticipant*>(participant_);
    auto factory = eprosima::fastdds::dds::DomainParticipantFactory::get_instance();
-   return factory->delete_participant(participant);
+   uint32_t ret = factory->delete_participant(participant);
+   if (ret == eprosima::fastdds::dds::RETCODE_OK)
+   {
+      // The listener can only go once the participant (and its discovery threads) is gone.
+      fastddsjava_GraphListener* listener = nullptr;
+      {
+         std::lock_guard<std::mutex> lock(g_graph_mutex);
+         auto it = g_graph_listeners.find(participant_);
+         if (it != g_graph_listeners.end())
+         {
+            listener = it->second;
+            g_graph_listeners.erase(it);
+         }
+      }
+      delete listener;
+   }
+   return ret;
+}
+
+std::vector<fastddsjava_DiscoveredEndpoint> fastddsjava_participant_get_discovered_endpoints(void* participant_)
+{
+   fastddsjava_GraphListener* listener = graph_listener(participant_);
+   return listener != nullptr ? listener->snapshot() : std::vector<fastddsjava_DiscoveredEndpoint>();
+}
+
+std::vector<std::string> fastddsjava_participant_get_discovered_participant_addresses(void* participant_)
+{
+   fastddsjava_GraphListener* listener = graph_listener(participant_);
+   return listener != nullptr ? listener->participant_addresses() : std::vector<std::string>();
+}
+
+std::vector<std::string> fastddsjava_participant_get_discovered_participant_names(void* participant_)
+{
+   fastddsjava_GraphListener* listener = graph_listener(participant_);
+   return listener != nullptr ? listener->participant_names() : std::vector<std::string>();
+}
+
+bool fastddsjava_datawriter_get_last_sample_identity(void* writer_, uint8_t* identity_out)
+{
+   std::lock_guard<std::mutex> lock(g_identity_mutex);
+   auto it = g_last_identity.find(writer_);
+   if (it == g_last_identity.end())
+      return false;
+   write_identity(it->second, identity_out);
+   return true;
+}
+
+void fastddsjava_sample_info_get_sample_identity(eprosima::fastdds::dds::SampleInfo* info, uint8_t* identity_out)
+{
+   write_identity(info->sample_identity, identity_out);
+}
+
+void fastddsjava_sample_info_get_related_sample_identity(eprosima::fastdds::dds::SampleInfo* info, uint8_t* identity_out)
+{
+   write_identity(info->related_sample_identity, identity_out);
 }
 
 void* fastddsjava_create_publisher(void* participant_, const std::string& profile_name)
@@ -274,13 +602,26 @@ uint32_t fastddsjava_delete_datawriter(void* publisher_, void* writer_)
 {
    auto* publisher = static_cast<eprosima::fastdds::dds::Publisher*>(publisher_);
    auto* writer = static_cast<eprosima::fastdds::dds::DataWriter*>(writer_);
+   {
+      std::lock_guard<std::mutex> lock(g_identity_mutex);
+      g_last_identity.erase(writer_);
+   }
    return publisher->delete_datawriter(writer);
 }
 
 uint32_t fastddsjava_datawriter_write(void* writer_, fastddsjava_TopicDataWrapper* data)
 {
    auto* writer = static_cast<eprosima::fastdds::dds::DataWriter*>(writer_);
-   return writer->write(data);
+   // WriteParams returns the identity Fast DDS gave the sample: a service client needs it to tell
+   // which reply (related_sample_identity) answers which request.
+   eprosima::fastdds::rtps::WriteParams params;
+   uint32_t ret = writer->write(data, params);
+   if (ret == eprosima::fastdds::dds::RETCODE_OK)
+   {
+      std::lock_guard<std::mutex> lock(g_identity_mutex);
+      g_last_identity[writer_] = params.sample_identity();
+   }
+   return ret;
 }
 
 uint32_t fastddsjava_datawriter_set_listener(void* writer_, fastddsjava_DataWriterListener* listener)
