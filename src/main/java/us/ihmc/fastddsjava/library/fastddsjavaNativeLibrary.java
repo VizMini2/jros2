@@ -110,7 +110,9 @@ public final class fastddsjavaNativeLibrary
          }
          try (OutputStream out = Files.newOutputStream(target))
          {
-            in.transferTo(out);
+            byte[] chunk = new byte[8192]; // InputStream.transferTo needs Android API 33
+            for (int n; (n = in.read(chunk)) > 0; )
+               out.write(chunk, 0, n);
          }
       }
       target.toFile().deleteOnExit();

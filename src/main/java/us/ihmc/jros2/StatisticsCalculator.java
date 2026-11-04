@@ -101,7 +101,7 @@ class StatisticsCalculator
    @Override
    public String toString()
    {
-      return "%s: {AVERAGE=%f, MINIMUM=%f, MAXIMUM=%f, STDDEV=%f, SAMPLE_COUNT=%f, TOTAL=%f, LATEST=%f}".formatted(getClass().getSimpleName(),
+      return String.format("%s: {AVERAGE=%f, MINIMUM=%f, MAXIMUM=%f, STDDEV=%f, SAMPLE_COUNT=%f, TOTAL=%f, LATEST=%f}", getClass().getSimpleName(),
                                                                                                                    average,
                                                                                                                    min,
                                                                                                                    max,

@@ -120,7 +120,7 @@ public class IDLIntSequence extends IDLSequence<IDLIntSequence> implements Itera
    public int remove(int index)
    {
       int value = buffer.get(index);
-      buffer.put(index, buffer, index + 1, buffer.position() - index - 1);
+      IDLBuffers.copy(buffer, index, buffer, index + 1, buffer.position() - index - 1);
       buffer.position(buffer.position() - 1);
       return value;
    }
@@ -153,7 +153,7 @@ public class IDLIntSequence extends IDLSequence<IDLIntSequence> implements Itera
          else
          {
             IntBuffer newBuffer = IntBuffer.allocate(desiredCapacity);
-            newBuffer.put(0, buffer, 0, buffer.position());
+            IDLBuffers.copy(newBuffer, 0, buffer, 0, buffer.position());
             newBuffer.position(buffer.position());
 
             buffer = newBuffer;
@@ -189,7 +189,7 @@ public class IDLIntSequence extends IDLSequence<IDLIntSequence> implements Itera
       int othersElements = other.size();
       ensureMinCapacity(othersElements);
 
-      buffer.put(0, other.buffer, 0, othersElements);
+      IDLBuffers.copy(buffer, 0, other.buffer, 0, othersElements);
       buffer.position(othersElements);
    }
 

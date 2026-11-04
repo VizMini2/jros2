@@ -108,7 +108,7 @@ public class IDLByteSequence extends IDLSequence<IDLByteSequence> implements Ite
    public byte remove(int index)
    {
       byte value = buffer.get(index);
-      buffer.put(index, buffer, index + 1, buffer.position() - index - 1);
+      IDLBuffers.copy(buffer, index, buffer, index + 1, buffer.position() - index - 1);
       buffer.position(buffer.position() - 1);
       return value;
    }
@@ -153,7 +153,7 @@ public class IDLByteSequence extends IDLSequence<IDLByteSequence> implements Ite
          else
          {
             ByteBuffer newBuffer = ByteBuffer.allocate(desiredCapacity);
-            newBuffer.put(0, buffer, 0, buffer.position());
+            IDLBuffers.copy(newBuffer, 0, buffer, 0, buffer.position());
             newBuffer.position(buffer.position());
 
             buffer = newBuffer;
@@ -189,7 +189,7 @@ public class IDLByteSequence extends IDLSequence<IDLByteSequence> implements Ite
       int othersElements = other.size();
       ensureMinCapacity(othersElements);
 
-      buffer.put(0, other.buffer, 0, othersElements);
+      IDLBuffers.copy(buffer, 0, other.buffer, 0, othersElements);
       buffer.position(othersElements);
    }
 

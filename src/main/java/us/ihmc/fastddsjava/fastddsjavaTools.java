@@ -89,7 +89,7 @@ public final class fastddsjavaTools
 
    public static String retcodeMessage(int ReturnCode_t)
    {
-      return "Fast-DDS retcode (%d): %s".formatted(ReturnCode_t, retcodeName(ReturnCode_t));
+      return String.format("Fast-DDS retcode (%d): %s", ReturnCode_t, retcodeName(ReturnCode_t));
    }
 
    public static void retcodeThrowOnError(int ReturnCode_t) throws fastddsjavaException
@@ -105,7 +105,7 @@ public final class fastddsjavaTools
       // Avoid allocating an exception on the publish hot path when the retcode is OK.
       if (RETCODE_OK != ReturnCode_t)
       {
-         System.err.println("Fast-DDS error: %s".formatted(retcodeMessage(ReturnCode_t)));
+         System.err.println(String.format("Fast-DDS error: %s", retcodeMessage(ReturnCode_t)));
       }
    }
 }

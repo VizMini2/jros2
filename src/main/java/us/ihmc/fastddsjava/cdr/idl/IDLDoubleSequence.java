@@ -132,7 +132,7 @@ public class IDLDoubleSequence extends IDLSequence<IDLDoubleSequence> implements
    public double remove(int index)
    {
       double value = buffer.get(index);
-      buffer.put(index, buffer, index + 1, buffer.position() - index - 1);
+      IDLBuffers.copy(buffer, index, buffer, index + 1, buffer.position() - index - 1);
       buffer.position(buffer.position() - 1);
       return value;
    }
@@ -165,7 +165,7 @@ public class IDLDoubleSequence extends IDLSequence<IDLDoubleSequence> implements
          else
          {
             DoubleBuffer newBuffer = DoubleBuffer.allocate(desiredCapacity);
-            newBuffer.put(0, buffer, 0, buffer.position());
+            IDLBuffers.copy(newBuffer, 0, buffer, 0, buffer.position());
             newBuffer.position(buffer.position());
 
             buffer = newBuffer;
@@ -201,7 +201,7 @@ public class IDLDoubleSequence extends IDLSequence<IDLDoubleSequence> implements
       int othersElements = other.size();
       ensureMinCapacity(othersElements);
 
-      buffer.put(0, other.buffer, 0, othersElements);
+      IDLBuffers.copy(buffer, 0, other.buffer, 0, othersElements);
       buffer.position(othersElements);
    }
 

@@ -132,7 +132,7 @@ public class IDLFloatSequence extends IDLSequence<IDLFloatSequence> implements I
    public float remove(int index)
    {
       float value = buffer.get(index);
-      buffer.put(index, buffer, index + 1, buffer.position() - index - 1);
+      IDLBuffers.copy(buffer, index, buffer, index + 1, buffer.position() - index - 1);
       buffer.position(buffer.position() - 1);
       return value;
    }
@@ -165,7 +165,7 @@ public class IDLFloatSequence extends IDLSequence<IDLFloatSequence> implements I
          else
          {
             FloatBuffer newBuffer = FloatBuffer.allocate(desiredCapacity);
-            newBuffer.put(0, buffer, 0, buffer.position());
+            IDLBuffers.copy(newBuffer, 0, buffer, 0, buffer.position());
             newBuffer.position(buffer.position());
 
             buffer = newBuffer;
@@ -201,7 +201,7 @@ public class IDLFloatSequence extends IDLSequence<IDLFloatSequence> implements I
       int othersElements = other.size();
       ensureMinCapacity(othersElements);
 
-      buffer.put(0, other.buffer, 0, othersElements);
+      IDLBuffers.copy(buffer, 0, other.buffer, 0, othersElements);
       buffer.position(othersElements);
    }
 

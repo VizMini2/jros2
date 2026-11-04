@@ -230,7 +230,7 @@ public class AsyncROS2Node extends ROS2Node
                final int index = (int) producer & mask;
                while (!slots.compareAndSet(index, null, task))
                {
-                  Thread.onSpinWait();
+                  Thread.yield(); // Thread.onSpinWait() needs Android API 33
                }
                return true;
             }
@@ -250,7 +250,7 @@ public class AsyncROS2Node extends ROS2Node
          while ((task = slots.get(index)) == null)
          {
             // Producer claimed the index but has not published the reference yet.
-            Thread.onSpinWait();
+            Thread.yield(); // Thread.onSpinWait() needs Android API 33
          }
          slots.lazySet(index, null);
          consumerIndex.set(consumer + 1L);
