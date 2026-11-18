@@ -13,6 +13,7 @@
 #include <fastdds/dds/domain/DomainParticipantListener.hpp>
 #include <fastdds/dds/domain/qos/DomainParticipantExtendedQos.hpp>
 #include <fastdds/utils/IPLocator.hpp>
+#include <fastdds/rtps/common/InstanceHandle.hpp>
 #include <fastdds/rtps/common/SampleIdentity.hpp>
 #include <fastdds/rtps/common/WriteParams.hpp>
 #include <fastdds/dds/publisher/DataWriter.hpp>
@@ -318,9 +319,11 @@ fastddsjava_GraphListener* graph_listener(void* participant_)
    return it == g_graph_listeners.end() ? nullptr : it->second;
 }
 
-// Identity of the last sample written by each writer (only writers that have written at least once).
+// Identity of the last sample written by each writer (only writers whose last write succeeded).
 std::mutex g_identity_mutex;
 std::unordered_map<void*, eprosima::fastdds::rtps::SampleIdentity> g_last_identity;
+// Related sample identity for the next sample each writer writes (set just before writing it, used once).
+std::unordered_map<void*, eprosima::fastdds::rtps::SampleIdentity> g_next_related;
 
 void write_identity(const eprosima::fastdds::rtps::SampleIdentity& id, uint8_t* out)
 {
@@ -333,6 +336,22 @@ void write_identity(const eprosima::fastdds::rtps::SampleIdentity& id, uint8_t* 
       out[16 + i] = static_cast<uint8_t>((static_cast<uint32_t>(high) >> (24 - 8 * i)) & 0xFF);
       out[20 + i] = static_cast<uint8_t>((low >> (24 - 8 * i)) & 0xFF);
    }
+}
+
+eprosima::fastdds::rtps::SampleIdentity read_identity(const uint8_t* in)
+{
+   eprosima::fastdds::rtps::SampleIdentity id;
+   memcpy(id.writer_guid().guidPrefix.value, in, 12);
+   memcpy(id.writer_guid().entityId.value, in + 12, 4);
+   uint32_t high = 0;
+   uint32_t low = 0;
+   for (int i = 0; i < 4; ++i)
+   {
+      high = (high << 8) | in[16 + i];
+      low = (low << 8) | in[20 + i];
+   }
+   id.sequence_number(eprosima::fastdds::rtps::SequenceNumber_t(static_cast<int32_t>(high), low));
+   return id;
 }
 } // namespace
 
@@ -505,6 +524,39 @@ void fastddsjava_sample_info_get_related_sample_identity(eprosima::fastdds::dds:
    write_identity(info->related_sample_identity, identity_out);
 }
 
+void fastddsjava_datawriter_set_next_related_sample_identity(void* writer_, const uint8_t* identity)
+{
+   std::lock_guard<std::mutex> lock(g_identity_mutex);
+   if (identity == nullptr)
+      g_next_related.erase(writer_);
+   else
+      g_next_related[writer_] = read_identity(identity);
+}
+
+bool fastddsjava_datawriter_is_matched_with(void* writer_, const uint8_t* reader_guid)
+{
+   auto* writer = static_cast<eprosima::fastdds::dds::DataWriter*>(writer_);
+   std::vector<eprosima::fastdds::dds::InstanceHandle_t> handles;
+   if (writer->get_matched_subscriptions(handles) != eprosima::fastdds::dds::RETCODE_OK)
+      return false;
+   for (const auto& handle : handles)
+   {
+      eprosima::fastdds::rtps::GUID_t guid;
+      eprosima::fastdds::rtps::iHandle2GUID(guid, handle);
+      if (memcmp(guid.guidPrefix.value, reader_guid, 12) == 0 && memcmp(guid.entityId.value, reader_guid + 12, 4) == 0)
+         return true;
+   }
+   return false;
+}
+
+void fastddsjava_datareader_get_guid(void* reader_, uint8_t* guid_out)
+{
+   auto* reader = static_cast<eprosima::fastdds::dds::DataReader*>(reader_);
+   const eprosima::fastdds::rtps::GUID_t& guid = reader->guid();
+   memcpy(guid_out, guid.guidPrefix.value, 12);
+   memcpy(guid_out + 12, guid.entityId.value, 4);
+}
+
 void* fastddsjava_create_publisher(void* participant_, const std::string& profile_name)
 {
    auto* participant = static_cast<eprosima::fastdds::dds::DomainParticipant*>(participant_);
@@ -605,6 +657,7 @@ uint32_t fastddsjava_delete_datawriter(void* publisher_, void* writer_)
    {
       std::lock_guard<std::mutex> lock(g_identity_mutex);
       g_last_identity.erase(writer_);
+      g_next_related.erase(writer_);
    }
    return publisher->delete_datawriter(writer);
 }
@@ -614,13 +667,25 @@ uint32_t fastddsjava_datawriter_write(void* writer_, fastddsjava_TopicDataWrappe
    auto* writer = static_cast<eprosima::fastdds::dds::DataWriter*>(writer_);
    // WriteParams returns the identity Fast DDS gave the sample: a service client needs it to tell
    // which reply (related_sample_identity) answers which request.
+   // A service server sets the request's identity as the reply's related_sample_identity (and a client, its reply
+   // reader's GUID, as rmw_fastrtps does, so the server can wait until that reader is matched).
    eprosima::fastdds::rtps::WriteParams params;
-   uint32_t ret = writer->write(data, params);
-   if (ret == eprosima::fastdds::dds::RETCODE_OK)
    {
       std::lock_guard<std::mutex> lock(g_identity_mutex);
-      g_last_identity[writer_] = params.sample_identity();
+      auto related = g_next_related.find(writer_);
+      if (related != g_next_related.end())
+      {
+         params.related_sample_identity(related->second);
+         g_next_related.erase(related);
+      }
    }
+   uint32_t ret = writer->write(data, params);
+   std::lock_guard<std::mutex> lock(g_identity_mutex);
+   if (ret == eprosima::fastdds::dds::RETCODE_OK)
+      g_last_identity[writer_] = params.sample_identity();
+   else
+      // Not the previous sample's identity: the caller would wait for the reply to another request.
+      g_last_identity.erase(writer_);
    return ret;
 }
 

@@ -121,5 +121,11 @@ std::vector<std::string> fastddsjava_participant_get_discovered_participant_addr
 bool fastddsjava_datawriter_get_last_sample_identity(void* writer_, uint8_t* identity_out);
 void fastddsjava_sample_info_get_sample_identity(eprosima::fastdds::dds::SampleInfo* info, uint8_t* identity_out);
 void fastddsjava_sample_info_get_related_sample_identity(eprosima::fastdds::dds::SampleInfo* info, uint8_t* identity_out);
+// The related_sample_identity (24 bytes) of the next sample this writer writes, only that one; null clears it.
+void fastddsjava_datawriter_set_next_related_sample_identity(void* writer_, const uint8_t* identity);
+// Whether this writer is matched with the reader with that GUID (16 bytes).
+bool fastddsjava_datawriter_is_matched_with(void* writer_, const uint8_t* reader_guid);
+// The GUID (16 bytes) of this reader.
+void fastddsjava_datareader_get_guid(void* reader_, uint8_t* guid_out);
 
 #endif // FASTDDSJAVA_H

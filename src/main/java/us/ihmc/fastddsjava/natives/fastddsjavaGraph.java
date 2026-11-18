@@ -35,7 +35,7 @@ public final class fastddsjavaGraph
 
    /**
     * Identity (16 bytes writer GUID + 8 bytes sequence number, big endian) of the last sample written by this
-    * writer. Returns false if it has not written anything yet.
+    * writer. Returns false if it has not written anything yet, or if its last write failed.
     */
    public static native boolean dataWriterGetLastSampleIdentity(long fastddsDataWriter, byte[] identityOut);
 
@@ -43,4 +43,17 @@ public final class fastddsjavaGraph
 
    /** For a service reply, the identity of the request it answers. */
    public static native void sampleInfoRelatedSampleIdentity(long fastddsSampleInfo, byte[] identityOut);
+
+   /**
+    * The related_sample_identity (24 bytes, as above) of the next sample this writer writes, only that one; null clears
+    * it. A service server sets the request's identity on its reply; a client, its reply reader's GUID (with an unknown
+    * sequence number) on the request, as rmw_fastrtps does, so the server can wait until that reader is matched.
+    */
+   public static native void dataWriterSetNextRelatedSampleIdentity(long fastddsDataWriter, byte[] identity);
+
+   /** Whether this writer is matched with the reader with that GUID (16 bytes). */
+   public static native boolean dataWriterIsMatchedWith(long fastddsDataWriter, byte[] readerGuid);
+
+   /** The GUID (16 bytes) of this reader. */
+   public static native void dataReaderGetGuid(long fastddsDataReader, byte[] guidOut);
 }

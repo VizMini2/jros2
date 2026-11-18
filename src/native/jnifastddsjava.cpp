@@ -591,6 +591,36 @@ extern "C" JNIEXPORT void JNICALL JNIFASTDDSGRAPH(sampleInfoRelatedSampleIdentit
    fillIdentity(env, identityOut, identity);
 }
 
+extern "C" JNIEXPORT void JNICALL JNIFASTDDSGRAPH(dataWriterSetNextRelatedSampleIdentity)(JNIEnv* env, jclass, jlong writer, jbyteArray identity)
+{
+   if (identity == nullptr || env->GetArrayLength(identity) < 24)
+   {
+      fastddsjava_datawriter_set_next_related_sample_identity(reinterpret_cast<void*>(writer), nullptr);
+      return;
+   }
+   uint8_t bytes[24];
+   env->GetByteArrayRegion(identity, 0, 24, reinterpret_cast<jbyte*>(bytes));
+   fastddsjava_datawriter_set_next_related_sample_identity(reinterpret_cast<void*>(writer), bytes);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL JNIFASTDDSGRAPH(dataWriterIsMatchedWith)(JNIEnv* env, jclass, jlong writer, jbyteArray readerGuid)
+{
+   if (readerGuid == nullptr || env->GetArrayLength(readerGuid) < 16)
+      return JNI_FALSE;
+   uint8_t guid[16];
+   env->GetByteArrayRegion(readerGuid, 0, 16, reinterpret_cast<jbyte*>(guid));
+   return fastddsjava_datawriter_is_matched_with(reinterpret_cast<void*>(writer), guid) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL JNIFASTDDSGRAPH(dataReaderGetGuid)(JNIEnv* env, jclass, jlong reader, jbyteArray guidOut)
+{
+   if (guidOut == nullptr || env->GetArrayLength(guidOut) < 16)
+      return;
+   uint8_t guid[16];
+   fastddsjava_datareader_get_guid(reinterpret_cast<void*>(reader), guid);
+   env->SetByteArrayRegion(guidOut, 0, 16, reinterpret_cast<const jbyte*>(guid));
+}
+
 extern "C" JNIEXPORT void JNICALL JNIFASTDDSGRAPH(setInitialPeers)(JNIEnv* env, jclass, jobjectArray peers)
 {
    std::vector<std::string> out;
